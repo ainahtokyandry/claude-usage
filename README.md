@@ -14,6 +14,11 @@ by how close each is to its cap, and refreshes them in the background, so a limi
 about to bite is visible out of the corner of your eye rather than at the moment a request
 gets refused.
 
+> **Requires Claude Code** on the same Mac, signed in and used regularly. The app has no
+> sign-in of its own - it reads the token Claude Code keeps in the login keychain, and relies
+> on Claude Code to keep that token fresh. See
+> [Why Claude Code is required](#why-claude-code-is-required).
+
 ## The three limits
 
 | Row | What it meters |
@@ -55,16 +60,48 @@ credential of its own to manage.
   Claude Code itself.
 - Network hiccups do not blank the display: the last good numbers stay on screen, marked with
   `⚠︎`, and the menu carries the reason plus the time of the last successful update.
+- Polling is throttled. Opening the menu triggers a refresh, so there is a 15 second floor
+  between requests, and if the API ever answers `429` the app pauses for five minutes rather
+  than retrying into the limit. *Refresh Now* skips the floor but not the pause.
 - The app runs as an accessory (`LSUIElement`), so it has no Dock icon and no application
   window - only the menu bar item.
 - Written in Swift against AppKit, in a single source file (`main.swift`).
+
+### Why Claude Code is required
+
+There is no account to enter, no login screen and no settings pane. Signing in happens in
+Claude Code - `claude auth login`, or `/login` inside a session - which writes the OAuth token
+to the login keychain. ClaudeUsageBar reads that token and nothing else.
+
+This is an **ongoing** dependency, not a one-time setup step. OAuth access tokens expire after
+a few hours. Claude Code refreshes its token when it starts; ClaudeUsageBar deliberately does
+not. On a Mac where `claude` never runs, the app therefore reaches `⚠︎ Token expired` within
+hours and stays there until Claude Code is run again.
+
+That is a deliberate trade rather than an oversight. The refresh token sits in the same
+keychain blob and the app could spend it, but refresh tokens commonly rotate on use: spending
+one without writing the replacement back would invalidate the copy Claude Code holds and break
+your actual CLI login, while writing it back would mean two processes racing for the same
+credential. For a status indicator neither is worth the risk, so the app stays strictly
+read-only and lets Claude Code own the token.
+
+Removing the dependency altogether is not clean either. Its own OAuth flow would mean either
+registering a client with Anthropic or reusing Claude Code's client ID, which amounts to a
+third-party app impersonating Claude Code. An API key reports no subscription windows, so
+there would be nothing to show. The Admin API is org-scoped, needs an admin key, and reports
+different figures than these three windows.
+
+In practice the constraint costs little: these three limits only exist for someone with a
+Claude subscription who is actively spending it through Claude Code, and anyone who wants
+this in their menu bar already has the CLI signed in.
 
 ## Requirements
 
 - macOS 13 or later
 - Xcode Command Line Tools, which provide `swiftc` and `codesign`
-- Claude Code signed in with a Claude subscription, so that the keychain entry exists - in
-  other words, `claude` has been run and authenticated at least once. API key users have no
+- **Claude Code, installed on the same Mac and signed in with a Claude subscription**
+  (`claude auth login`). This app has no sign-in of its own - see
+  [Why Claude Code is required](#why-claude-code-is-required) below. API key users have no
   subscription limits to report.
 
 If the command line tools are not installed yet:
@@ -188,10 +225,11 @@ executable invalidates the existing signature.
 ## Troubleshooting
 
 **The menu bar shows `⚠︎` and "Not signed in".** No `Claude Code-credentials` entry was found
-in the login keychain. Run `claude` in a terminal and sign in, then pick *Refresh Now*.
+in the login keychain. Run `claude auth login` in a terminal, then pick *Refresh Now*.
 
 **The menu bar shows `⚠︎` and "Token expired".** The stored access token is past its expiry.
-Run `claude` in a terminal - it refreshes the token on startup - then pick *Refresh Now*.
+Start `claude` in a terminal - it refreshes the token on startup - then pick *Refresh Now*. If
+that does not clear it, sign in again with `claude auth login`.
 
 **A keychain prompt keeps appearing.** Choose *Always Allow* rather than *Allow*, so the
 decision is remembered for later refreshes.

@@ -79,6 +79,7 @@ enum Fetch {
     case ok([Limit])
     case noCredentials
     case unauthorized
+    case rateLimited
     case failed(String)
 }
 
@@ -193,6 +194,10 @@ func fetchUsage(completion: @escaping (Fetch) -> Void) {
             completion(.unauthorized)
             return
         }
+        if code == 429 {
+            completion(.rateLimited)
+            return
+        }
         guard code == 200, let data = data else {
             completion(.failed("HTTP \(code)"))
             return
@@ -220,6 +225,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menu = NSMenu()
     private var timer: Timer?
     private var fetching = false
+    private var floorUntil = Date.distantPast    // minimum gap between polls
+    private var backoffUntil = Date.distantPast  // set only by a 429
 
     private var limits: [Limit] = []
     private var lastUpdate: Date?
@@ -243,10 +250,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         render()
-        refresh()
+        fetch(force: true)
 
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            self?.refresh()
+            self?.fetch(force: false)
         }
     }
 
@@ -262,8 +269,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Data
 
-    @objc private func refresh() {
+    /// Menu item and keyboard shortcut. Skips the polite floor between polls,
+    /// but not a rate limit — forcing through one would only deepen it.
+    @objc private func refreshNow() { fetch(force: true) }
+
+    private func fetch(force: Bool) {
         guard !fetching else { return }
+        let now = Date()
+        // Opening the menu triggers a fetch, so without a floor a few flicks of
+        // the mouse would be a few requests a second.
+        guard now >= backoffUntil, force || now >= floorUntil else { return }
+
         fetching = true
         // The keychain read can block (and may show a prompt), so keep it off
         // the main thread.
@@ -271,17 +287,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fetchUsage { result in
                 DispatchQueue.main.async {
                     self.fetching = false
+                    let now = Date()
                     switch result {
                     case .ok(let limits):
                         self.limits = limits
-                        self.lastUpdate = Date()
+                        self.lastUpdate = now
                         self.problem = nil
+                        self.floorUntil = now.addingTimeInterval(15)
                     case .noCredentials:
-                        self.problem = "Not signed in — run `claude` in a terminal to authenticate"
+                        self.problem = "Not signed in — run `claude auth login` in a terminal"
+                        self.floorUntil = now.addingTimeInterval(60)
                     case .unauthorized:
-                        self.problem = "Token expired — run `claude` in a terminal to refresh it"
+                        self.problem = "Token expired — start `claude` in a terminal to refresh it"
+                        self.floorUntil = now.addingTimeInterval(60)
+                    case .rateLimited:
+                        self.problem = "Rate limited by the usage API — pausing for 5 minutes"
+                        self.backoffUntil = now.addingTimeInterval(300)
                     case .failed(let why):
                         self.problem = "Could not reach the usage API (\(why))"
+                        self.floorUntil = now.addingTimeInterval(60)
                     }
                     self.render()
                 }
@@ -357,7 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(note(lastUpdate.map { "Updated \(clockFormat($0))" } ?? "Never updated"))
-        menu.addItem(item("Refresh Now", #selector(refresh), "r"))
+        menu.addItem(item("Refresh Now", #selector(refreshNow), "r"))
         menu.addItem(item("Open Usage on claude.ai", #selector(openDashboard), "o"))
 
         let toggle = item("Compact Menu Bar Display", #selector(toggleCompact), "")
@@ -408,7 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Actions
 
     func menuWillOpen(_ menu: NSMenu) {
-        refresh()
+        fetch(force: false)
     }
 
     @objc private func openDashboard() {
@@ -442,9 +466,11 @@ if CommandLine.arguments.contains("--print") {
                       + String(format: " %3d%%  ", limit.percent) + resets)
             }
         case .noCredentials:
-            print("not signed in — run `claude` in a terminal to authenticate"); status = 1
+            print("not signed in — run `claude auth login` in a terminal"); status = 1
+        case .rateLimited:
+            print("rate limited by the usage API — try again in a few minutes"); status = 1
         case .unauthorized:
-            print("token expired — run `claude` in a terminal to refresh it"); status = 1
+            print("token expired — start `claude` in a terminal to refresh it"); status = 1
         case .failed(let why):
             print("could not reach the usage API: \(why)"); status = 1
         }
