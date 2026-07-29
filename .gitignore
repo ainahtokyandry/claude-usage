@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Build products
+ClaudeUsageBar
+ClaudeUsageBar.app/
+*.o
+*.dSYM/
+
+# Machine-local editor/tool state
+.claude/settings.local.json
