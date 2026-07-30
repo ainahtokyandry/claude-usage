@@ -1,18 +1,25 @@
-# ClaudeUsageBar
+# claude-usage
 
-A tiny macOS menu bar app that keeps all three of your Claude usage limits visible at all
-times - the same numbers `/usage` prints inside Claude Code, without having to open a session
-to see them.
+The **Claude usage section** of [MacBar](https://github.com/ainahtokyandry/mac-setup): all
+three of your Claude usage limits in the menu bar - the same numbers `/usage` prints inside
+Claude Code, without having to open a session to see them.
 
 ```
 5h 42% · 7d 61% · Opus 18%
 ```
 
 Claude subscriptions are metered across three separate windows, and it is easy to be surprised
-by the one you were not watching. ClaudeUsageBar puts all three in the menu bar, colours them
-by how close each is to its cap, and refreshes them in the background, so a limit that is
-about to bite is visible out of the corner of your eye rather than at the moment a request
-gets refused.
+by the one you were not watching. This puts all three in the menu bar, colours them by how
+close each is to its cap, and refreshes them in the background, so a limit that is about to
+bite is visible out of the corner of your eye rather than at the moment a request gets refused.
+
+It used to be a menu bar app of its own. It still builds as one, but its normal home is
+alongside MacBar's other sections behind a single menu bar item, where it contributes the
+middle group:
+
+```
+⌾ 118 GB · 42·61·18% · ◷ Mon 08:00
+```
 
 > **Requires Claude Code** on the same Mac, signed in and used regularly. The app has no
 > sign-in of its own - it reads the token Claude Code keeps in the login keychain, and relies
@@ -65,7 +72,26 @@ credential of its own to manage.
   than retrying into the limit. *Refresh Now* skips the floor but not the pause.
 - The app runs as an accessory (`LSUIElement`), so it has no Dock icon and no application
   window - only the menu bar item.
-- Written in Swift against AppKit, in a single source file (`main.swift`).
+- Written in Swift against AppKit. No third-party dependencies.
+
+### How it fits together
+
+`ClaudeUsageSection.swift` is the whole of it: one class conforming to `BarSection`, the
+protocol the MacBar host defines. The host owns the status item, the dropdown, the colours and
+the date formatting; this repository owns the keychain read, the usage API, and how a limit is
+displayed.
+
+```
+ClaudeUsageSection.swift   the section: credentials, the usage API, polling, its menu block
+main.swift                 a standalone entry point - Host.run(sections: [ClaudeUsageSection()])
+build.sh                   builds ClaudeUsageBar.app against a MacBar host checkout
+Info.plist                 bundle metadata for the standalone app
+```
+
+There is deliberately **no copy of the host here**. `build.sh` compiles against a checkout of
+[mac-setup](https://github.com/ainahtokyandry/mac-setup), found in `MACBAR_HOST`, or beside
+this repository, or under `$HOME/Projects`. One definition of the contract means this section
+cannot drift away from the app that hosts it.
 
 ### Why Claude Code is required
 
@@ -112,13 +138,22 @@ xcode-select --install
 
 ## Installation
 
-The repository ships the source, not a prebuilt binary, so the app bundle is assembled
-locally. The whole process is four commands.
+You do not normally build this repository directly. MacBar's installer clones it, together with
+the other sections, and builds the one app:
 
-### 1. Get the source
+```bash
+zsh -c "$(curl -fsSL https://raw.githubusercontent.com/ainahtokyandry/mac-setup/main/install.sh)"
+```
+
+## Building it on its own
+
+Useful when working on the section itself. It needs the host, so clone that too:
+
+### 1. Get the source, and the host
 
 ```bash
 git clone https://github.com/ainahtokyandry/claude-usage.git
+git clone https://github.com/ainahtokyandry/mac-setup.git
 cd claude-usage
 ```
 
@@ -128,17 +163,15 @@ cd claude-usage
 ./build.sh
 ```
 
-`build.sh` creates `ClaudeUsageBar.app`, copies `Info.plist` into it, compiles `main.swift`
-with `swiftc -O`, and signs the bundle ad hoc with `codesign`. The signing step is required -
-an unsigned bundle will not launch on recent versions of macOS.
+`build.sh` finds the host, creates `ClaudeUsageBar.app`, copies `Info.plist` into it, compiles
+`ClaudeUsageSection.swift` and `main.swift` together with the host's sources using `swiftc -O`, and signs
+the bundle ad hoc with `codesign`. The signing step is required - an unsigned bundle will not
+launch on recent versions of macOS.
 
-The equivalent by hand:
+If the host lives somewhere else:
 
 ```bash
-mkdir -p ClaudeUsageBar.app/Contents/MacOS
-cp Info.plist ClaudeUsageBar.app/Contents/Info.plist
-swiftc -O main.swift -o ClaudeUsageBar.app/Contents/MacOS/ClaudeUsageBar
-codesign --force --sign - ClaudeUsageBar.app
+MACBAR_HOST=/path/to/mac-setup/menubar ./build.sh
 ```
 
 ### 3. Run it
@@ -193,10 +226,13 @@ The same binary prints the three limits and exits when passed `--print`:
 ```
 
 ```
-Session (5h)         ██████░░░░░░░░  42%  resets 19:05 (in 2h 11m)
-Weekly (all models)  █████████░░░░░  61%  resets Sun 3 Aug, 09:00 (in 3d 4h)
-Weekly (Opus)        ███░░░░░░░░░░░  18%  resets Sun 3 Aug, 09:00 (in 3d 4h)
+Claude usage
+  Session (5h)         ██████░░░░░░░░  42%  resets 19:05 (in 2h 11m)
+  Weekly (all models)  █████████░░░░░  61%  resets Sun 3 Aug, 09:00 (in 3d 4h)
+  Weekly (Opus)        ███░░░░░░░░░░░  18%  resets Sun 3 Aug, 09:00 (in 3d 4h)
 ```
+
+MacBar's own binary prints every section the same way, this one among them.
 
 It exits non-zero if the usage could not be read, so it drops straight into a shell prompt or
 a status script.
@@ -210,17 +246,15 @@ replaced. `build.sh` does that itself:
 ./build.sh --run
 ```
 
-By hand: quit, rebuild, re-sign, relaunch.
+Skipping `codesign` after a rebuild leaves the bundle in a broken state, because replacing the
+executable invalidates the existing signature, which is why the build script always re-signs.
+
+To see a change in MacBar rather than in the standalone app, rebuild MacBar instead - it
+compiles this `ClaudeUsageSection.swift` straight out of this checkout:
 
 ```bash
-pkill -x ClaudeUsageBar
-swiftc -O main.swift -o ClaudeUsageBar.app/Contents/MacOS/ClaudeUsageBar
-codesign --force --sign - ClaudeUsageBar.app
-open ClaudeUsageBar.app
+cd ../mac-setup && ./install.sh macbar
 ```
-
-Skipping `codesign` after a rebuild leaves the bundle in a broken state, because replacing the
-executable invalidates the existing signature.
 
 ## Troubleshooting
 
@@ -243,28 +277,17 @@ shorten this one.
 
 ## Uninstalling
 
+The standalone bundle:
+
 ```bash
 pkill -x ClaudeUsageBar
 rm -rf /Applications/ClaudeUsageBar.app
-```
-
-If you added it as a login item, remove the entry in
-**System Settings > General > Login Items & Extensions** as well.
-
-Nothing else is left behind apart from one preference, the compact display toggle, which goes
-with:
-
-```bash
 defaults delete local.claudeusagebar
 ```
 
-## Project layout
-
-```
-main.swift    Entire application: keychain read, usage fetch, status item, menu, 60 second timer
-Info.plist    Bundle metadata (identifier, version, LSUIElement, minimum system version)
-build.sh      Assemble, compile and ad hoc sign the app bundle; --run also launches it
-```
+If you added it as a login item, remove the entry in
+**System Settings > General > Login Items & Extensions** as well. To remove MacBar instead, see
+[mac-setup](https://github.com/ainahtokyandry/mac-setup).
 
 Build products (`ClaudeUsageBar.app/` and any bare `ClaudeUsageBar` executable) are not
 tracked.
