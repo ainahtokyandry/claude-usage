@@ -205,6 +205,13 @@ final class ClaudeUsageSection: NSObject, BarSection {
         }
     }
 
+    /// Switched off in MacBar: no more polls. A request already in flight still
+    /// lands, and is simply not shown.
+    func deactivate() {
+        timer?.invalidate()
+        timer = nil
+    }
+
     /// `force` skips the polite floor between polls, but not a rate limit —
     /// forcing through one would only deepen it.
     func refresh(force: Bool) {
